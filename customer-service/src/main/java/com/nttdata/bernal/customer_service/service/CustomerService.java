@@ -13,6 +13,7 @@ import io.reactivex.rxjava3.core.Single;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cloud.client.circuitbreaker.ReactiveCircuitBreakerFactory;
 import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.stereotype.Service;
 import reactor.adapter.rxjava.RxJava3Adapter;
@@ -38,6 +39,7 @@ public class CustomerService {
 
     private final CustomerRepository customerRepository;
     private final KafkaProducerService kafkaProducer;
+    private final ReactiveCircuitBreakerFactory circuitBreakerFactory;
 
     public Single<Customer> create(Customer customer) {
         log.debug("Creating customer with document number {}", customer.getDocumentNumber());
@@ -82,7 +84,18 @@ public class CustomerService {
     }
 
     public Single<Customer> findById(String id) {
-        return RxJava3Adapter.monoToSingle(findCustomer(id));
+        return RxJava3Adapter.monoToSingle(
+                circuitBreakerFactory.create("customer-service")
+                        .run(
+                                findCustomer(id),
+                                throwable -> {
+                                    log.error("Circuit breaker activated for findById: {}",
+                                            throwable.getMessage());
+                                    return Mono.error(new ResourceNotFoundException(
+                                            "Customer service temporarily unavailable"));
+                                }
+                        )
+        );
     }
 
     public Single<Customer> update(String id, Customer customer) {
